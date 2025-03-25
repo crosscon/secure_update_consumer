@@ -29,3 +29,10 @@ SUIT-Parser$ make
 ```
 SUIT-Parser$ ./out/secure_update extract-sbom ./signed-example4.json.suit --key=public_key.pem
 ```
+
+## Test enviroment
+
+The parser was tested both on x86 and ARM architectures. In particular, for ARM the choice was to:
+
+* Build the parser on a Raspberry Pi4 (ARMv8, quad-core A72) running Raspberry Pi OS;
+* Execute the parser and tests on a Raspberry Pi4 running both Raspberry Pi OS and OP-TEE (porting guide: https://github.com/Jachm11/optee-os_raspberry_pi_4_port?tab=readme-ov-file). 
