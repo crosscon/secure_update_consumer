@@ -27,7 +27,7 @@ SUIT-Parser$ make
 2. Execute the library (the compiled library is stored in the `/out` folder) by passing the command and the manifest (optinally, the key):
 
 ```
-SUIT-Parser$ ./out/secure_update extract-sbom ./signed-example4.json.suit --key=public_key.pem
+ ./out/secure_update extract-sbom ../examples/signed-example1.json.suit --key=../examples/public_key.pem
 ```
 
 ## Test enviroment
