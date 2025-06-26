@@ -18,13 +18,43 @@ The folder contains:
 
 ## Build instructions
 
-1. Build the secure update library and the dependency with make on the root of the `SUIT-Parser` folder:
+1. Install or compile libcoap3
+
+Install it with the following command:
+
+```
+sudo apt-get install libcoap3-dev 
+```
+
+If the libcoap3 is not available on your system, compile it with the following way:
+
+```
+wget https://github.com/obgm/libcoap/archive/main.zip
+cd libcoap-main/
+./autogen.sh
+./configure --disable-manpages --disable-dtls
+make LIBS="-lpthread"
+sudo make LIBS="-lpthread" install
+sudo ldconfig
+```
+
+2. Set server URLs and IP addresses
+
+Add the following hosts to your /etc/hosts file (or change it in the source) in order the client can access the servers.
+
+```
+10.200.10.10 example.com
+10.200.10.10 sbomverifier.com
+10.200.10.10 statusserver.com
+```
+
+3. Build the secure update library and the dependency with make on the root of the `SUIT-Parser` folder:
 
 ```
 SUIT-Parser$ make 
 ```
 
-2. Execute the library (the compiled library is stored in the `/out` folder) by passing the command and the manifest (optinally, the key):
+4. Execute the library (the compiled library is stored in the `/out` folder) by passing the command and the manifest (optinally, the key):
 
 ```
  ./out/secure_update extract-sbom ../examples/signed-example1.json.suit --key=../examples/public_key.pem

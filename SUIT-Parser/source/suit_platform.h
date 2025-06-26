@@ -56,6 +56,7 @@ void cleanup_public_key(void);
 // Secure Update APIs
 uint8_t *TA_CROSSCON_GET_SBOM(const uint8_t *manifest, size_t manifest_size);
 uint8_t TA_CROSSCON_VALIDATE_MANIFEST(const uint8_t *manifest, size_t manifest_size);
+uint8_t TA_CROSSCON_INSTALL_IMAGE(const uint8_t *manifest, size_t manifest_size);
 size_t TA_CROSSCON_GET_PROPERTIES(const uint8_t *manifest, size_t manifest_size, char **properties);
 uint8_t TA_CROSSCON_INSTALL_IMAGE(const uint8_t *image, size_t image_size);
 uint8_t TA_CROSSCON_GET_IMAGE(const uint8_t *manifest, size_t manifest_size, uint8_t **image, size_t *image_size);

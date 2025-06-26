@@ -23,6 +23,7 @@
 #define CMD_EXTRACT_IMAGE       4
 #define CMD_INSTALL_IMAGE       5
 #define CMD_HELP                6
+#define CMD_UPDATE              7
 
 // Print tool usage information
 void print_usage(const char *argv0)
@@ -34,6 +35,7 @@ void print_usage(const char *argv0)
     printf("  extract-properties  Extract update properties\n");
     printf("  extract-image       Extract update image\n");
     printf("  install-image       Install update image\n");
+    printf("  update              Validate, extract and update the image\n");
     printf("  help                Show this help message\n");
     printf("\nOptions:\n");
     printf("  --key=PEM_FILE     Specify PEM file containing public key for signature verification\n");
@@ -47,6 +49,7 @@ int parse_command(const char *cmd)
     if (strcmp(cmd, "extract-properties") == 0) return CMD_EXTRACT_PROPERTIES;
     if (strcmp(cmd, "extract-image") == 0) return CMD_EXTRACT_IMAGE;
     if (strcmp(cmd, "install-image") == 0) return CMD_INSTALL_IMAGE;
+    if (strcmp(cmd, "update") == 0) return CMD_UPDATE;
     if (strcmp(cmd, "help") == 0) return CMD_HELP;
     
     return CMD_NONE; // Unknown command
@@ -123,7 +126,7 @@ int main(int argc, char **argv)
     switch (selected_command) {
         case CMD_VALIDATE_MANIFEST:
             printf("Manifest parsing and validation\n");
-            int rc = TA_CROSSCON_VALIDATE_MANIFEST(mfst_ptr, st.st_size);
+            rc = TA_CROSSCON_VALIDATE_MANIFEST(mfst_ptr, st.st_size);
             if (rc != 0) {
                 printf("Manifest validation failed\n");
                 exit(EXIT_FAILURE);
@@ -185,7 +188,7 @@ int main(int argc, char **argv)
                 printf("Image extracted successfully (%zu bytes)\n", image_size);
                 
                 // Save the image to a file if needed
-                const char *output_file = "/out/images/update.bin";
+                const char *output_file = "out/images/update.bin";
                 FILE *file = fopen(output_file, "wb");
                 if (file) {
                     fwrite(image, 1, image_size, file);
@@ -210,7 +213,15 @@ int main(int argc, char **argv)
                 printf("Failed to install image\n");
             }
             break;
-            
+
+        case CMD_UPDATE:
+            printf("Updating image\n");
+            rc = TA_CROSSCON_UPDATE(mfst_ptr, st.st_size);
+            if (rc != 0) {
+                printf("Failed to update image: %d\n", rc);
+            }
+            break;
+
         case CMD_HELP:
             print_usage(argv[0]);
             exit(EXIT_SUCCESS);
@@ -227,5 +238,6 @@ int main(int argc, char **argv)
     close(manifest_fd);
     cleanup_resources();
     
-    exit(EXIT_SUCCESS);
+    printf("Exit code: %d",rc);
+    exit(rc);
 }

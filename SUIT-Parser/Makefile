@@ -49,6 +49,41 @@ MBEDTLS_INC?=$(abspath ${MBEDTLS_PATH}/include)
 # Main application source files - just stubs.c and secure_update.c
 MAIN_SRCS=stubs.c secure_update.c base64.c
 
+# --- Add libcurl flags using pkg-config ---
+# Check if pkg-config exists and libcurl is found
+PKG_CONFIG_PATH?=$(shell which pkg-config)
+ifeq ($(PKG_CONFIG_PATH),)
+  $(warning "pkg-config not found, libcurl flags may be incorrect.")
+  CURL_CFLAGS=
+  CURL_LIBS=-lcurl # Fallback: attempt to link directly
+else
+  CURL_CFLAGS := $(shell pkg-config --cflags libcurl)
+  CURL_LIBS := $(shell pkg-config --libs libcurl)
+  ifeq ($(CURL_CFLAGS)$(CURL_LIBS), ) # Check if both are empty or just one returned nothing useful
+    $(error "pkg-config could not find libcurl. Please install libcurl development package (e.g., libcurl4-openssl-dev or equivalent).")
+  endif
+endif
+# --- End libcurl flags ---
+
+# --- Add libcoap flags using pkg-config ---
+# Adjust 'libcoap-2' or 'libcoap-2-posix' based on your installed libcoap version and pkg-config name
+# Common names: libcoap-2, libcoap-2-posix, libcoap-3, libcoap-3-posix
+# For DTLS support, you might need libcoap-2-gnutls, libcoap-2-openssl, etc.
+# Check with: pkg-config --list-all | grep libcoap
+LIBCOAP_PKG_NAME?=libcoap-3-openssl # Default, user can override by setting LIBCOAP_PKG_NAME in their environment or command line
+ifeq ($(PKG_CONFIG_PATH),)
+  $(warning "pkg-config not found, libcoap flags may be incorrect.")
+  LIBCOAP_CFLAGS=
+  LIBCOAP_LIBS=-lcoap-2 # Fallback: attempt to link directly (adjust if needed)
+else
+  LIBCOAP_CFLAGS := $(shell pkg-config --cflags $(LIBCOAP_PKG_NAME))
+  LIBCOAP_LIBS := $(shell pkg-config --libs $(LIBCOAP_PKG_NAME))
+  ifeq ($(LIBCOAP_CFLAGS)$(LIBCOAP_LIBS), )
+    $(error "pkg-config could not find $(LIBCOAP_PKG_NAME). Please install libcoap development package (e.g., libcoap-2-dev or equivalent) and ensure '$(LIBCOAP_PKG_NAME)' is the correct pkg-config name.")
+  endif
+endif
+# --- End libcoap flags ---
+
 # Add includes and flags for mbedTLS
 CFLAGS+=-I${MBEDTLS_INC} -I${CBOR_INC} -I./include -I./source
 
@@ -92,7 +127,8 @@ ${ABS_OUT}%.o: %.c
 # Build the executable
 ${SECURE_UPDATE_EXEC}: ${MBEDTLS_LIB} ${SUIT_LIB} $(addprefix ${ABS_OUT}, $(MAIN_SRCS:.c=.o))
 	${Q}echo "Linking secure_update executable..."
-	${Q}${CC} -o $@ $(addprefix ${ABS_OUT}, $(MAIN_SRCS:.c=.o)) ${SUIT_LIB} ${CBOR_LIB} ${MBEDTLS_LIB} -lm
+#${Q}${CC} -o $@ $(addprefix ${ABS_OUT}, $(MAIN_SRCS:.c=.o)) ${SUIT_LIB} ${CBOR_LIB} ${MBEDTLS_LIB} -lm -lcurl
+	${Q}${CC} -o $@ $(addprefix ${ABS_OUT}, $(MAIN_SRCS:.c=.o)) ${SUIT_LIB} ${CBOR_LIB} ${MBEDTLS_LIB} -lm ${CURL_LIBS} ${LIBCOAP_LIBS}
 
 .PHONY: executable
 executable: ${SECURE_UPDATE_EXEC}
