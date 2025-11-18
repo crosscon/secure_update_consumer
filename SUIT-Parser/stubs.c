@@ -53,6 +53,7 @@
 #define ERROR_NET 4
 #define ERROR_MEM 5
 #define ERROR_SBOM_VALIDATION_FAILED 6 // New error code for SBOM
+#define ERROR_SYSTEM 7 // System error (e.g. file operations)
 
 // --- Error Codes (Example) --- TODO harmonize with the above
 #define SUIT_ERR_OK                   0
@@ -648,17 +649,13 @@ uint8_t TA_CROSSCON_UPDATE(const uint8_t *manifest, size_t manifest_size) {
         return ERROR_NET;
     }
 
-    // Save the image to a file if needed
-    const char *output_file = "out/images/update.bin";
-    FILE *file = fopen(output_file, "wb");
-    if (file) {
-        fwrite(update_image, 1, update_image_size, file);
-        fclose(file);
-        printf("Image saved to %s\n", output_file);
-    } else {
-        printf("Failed to save image to file\n");
+    // TODO: remove this temporary installation step and call TA_CROSSCON_INSTALL_IMAGE instead
+    rc = TA_CROSSCON_INSTALL_IMAGE(update_image, update_image_size);
+    if (rc != SUCCESS) {
+        printf("Image installation failed with error code: %d\n", rc);
+        return rc;
     }
-
+    printf("Image installed successfully.\n");
     // Free the allocated memory for the image
     free(update_image);
 
