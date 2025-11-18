@@ -359,182 +359,150 @@ int send_sbom_to_verifier(const uint8_t *base64_sbom_data, size_t base64_sbom_si
             if (http_code == 200 && chunk.memory) {
                 // Basic JSON parsing
                 // Expected response format:
-                // {"payload": "base64-encoded-response", "signature": "base64-encoded-signature"}
+                // base64_encoded_payload.base64_encoded_signature
+                // 
+                // The base64_encoded_payload contains binary fields:
+                // success: (byte) 1 | (uint32_t) vulnerability_count
+                // error: (byte) 0 | (string) error_message
 
                 // Extract the payload and signature fields
                 /* Extract "payload" and "signature" fields (base64 strings) from chunk.memory */
                 char *payload_b64 = NULL;
                 char *sig_b64 = NULL;
-                char *pstart = strstr(chunk.memory, "\"payload\":\"");
-                if (pstart) {
-                    pstart += strlen("\"payload\":\"");
-                    char *pend = strchr(pstart, '"');
-                    if (pend) {
-                        payload_b64 = strndup(pstart, pend - pstart);
-                    }
-                }
+                char *pstart = chunk.memory + 1; // exclude starting quote
+                char *pend = strchr(pstart, '.');
+                if (!pend) {
+                    fprintf(stderr, "ERROR: SBOM verifier response format invalid (missing signature part). Response: %s\n", chunk.memory);
+                    ret_val = ERROR_INVALID_MANIFEST;
+                } else {
+                    payload_b64 = strndup(pstart, pend - pstart); // Exclude the dot
 
-                char *sstart = strstr(chunk.memory, "\"signature\":\"");
-                if (sstart) {
-                    sstart += strlen("\"signature\":\"");
-                    char *send = strchr(sstart, '"');
-                    if (send) {
-                        sig_b64 = strndup(sstart, send - sstart);
-                    }
-                }
+                    char *sstart = pend + 1;
+                    sig_b64 = strdup(sstart);
+                    sig_b64[strcspn(sig_b64, "\"")] = '\0'; // Exclude trailing quote
 
-                uint8_t *payload_dec;
-                uint8_t *sig_dec;
-                if (payload_b64 && sig_b64) {
-                    // Decode payload and signature using mbedtls_base64_decode (gives lengths)
-                    size_t payload_b64_len = strlen(payload_b64);
-                    size_t payload_max = payload_b64_len * 3 / 4 + 4;
-                    payload_dec = malloc(payload_max + 1);
-                    size_t payload_len = 0;
-                    int bret = mbedtls_base64_decode(payload_dec, payload_max, &payload_len, (const unsigned char*)payload_b64, payload_b64_len);
-                    if (bret != 0) {
-                        char errbuf[200];
-                        mbedtls_strerror(bret, errbuf, sizeof(errbuf));
-                        fprintf(stderr, "ERROR: Failed to base64-decode payload: %s\n", errbuf);
-                        free(payload_dec);
-                        free(payload_b64);
-                        free(sig_b64);
-                        ret_val = ERROR_INVALID_MANIFEST;
-                    } else {
-                        payload_dec[payload_len] = '\0'; // Null-terminate in case it's textual JSON
+                    printf("Extracted payload (base64): %s\n", payload_b64);
+                    printf("Extracted signature (base64): %s\n", sig_b64);
 
-                        size_t sig_b64_len = strlen(sig_b64);
-                        size_t sig_max = sig_b64_len * 3 / 4 + 4;
-                        sig_dec = malloc(sig_max);
-                        size_t sig_len = 0;
-                        bret = mbedtls_base64_decode(sig_dec, sig_max, &sig_len, (const unsigned char*)sig_b64, sig_b64_len);
+                    uint8_t *payload_dec;
+                    uint8_t *sig_dec;
+                    if (payload_b64 && sig_b64) {
+                        // Decode payload and signature using mbedtls_base64_decode (gives lengths)
+                        size_t payload_b64_len = strlen(payload_b64);
+                        size_t payload_max = payload_b64_len * 3 / 4 + 4;
+                        payload_dec = malloc(payload_max + 1);
+                        size_t payload_len = 0;
+                        int bret = mbedtls_base64_decode(payload_dec, payload_max, &payload_len, (const unsigned char*)payload_b64, payload_b64_len);
                         if (bret != 0) {
                             char errbuf[200];
                             mbedtls_strerror(bret, errbuf, sizeof(errbuf));
-                            fprintf(stderr, "ERROR: Failed to base64-decode signature: %s\n", errbuf);
+                            fprintf(stderr, "ERROR: Failed to base64-decode payload: %s\n", errbuf);
                             free(payload_dec);
-                            free(sig_dec);
                             free(payload_b64);
                             free(sig_b64);
-                            ret_val = ERROR_INVALID_SIGNATURE;
+                            ret_val = ERROR_INVALID_MANIFEST;
                         } else {
-                            // Compute SHA-256 over decoded payload
-                            uint8_t hash[32];
-                            compute_sha256(hash, payload_dec, payload_len);
+                            payload_dec[payload_len] = '\0'; // Null-terminate in case it's textual JSON
 
-                            // Load RSA public key from PEM file (expected at keys/rsa_public.pem)
-                            mbedtls_pk_context pk;
-                            mbedtls_pk_init(&pk);
-                            int pret = mbedtls_pk_parse_public_keyfile(&pk, "keys/rsa_public.pem");
-                            if (pret != 0) {
+                            size_t sig_b64_len = strlen(sig_b64);
+                            size_t sig_max = sig_b64_len * 3 / 4 + 4;
+                            sig_dec = malloc(sig_max);
+                            size_t sig_len = 0;
+                            bret = mbedtls_base64_decode(sig_dec, sig_max, &sig_len, (const unsigned char*)sig_b64, sig_b64_len);
+                            if (bret != 0) {
                                 char errbuf[200];
-                                mbedtls_strerror(pret, errbuf, sizeof(errbuf));
-                                fprintf(stderr, "ERROR: Failed to parse RSA public key (keys/rsa_public.pem): %s\n", errbuf);
+                                mbedtls_strerror(bret, errbuf, sizeof(errbuf));
+                                fprintf(stderr, "ERROR: Failed to base64-decode signature: %s\n", errbuf);
+                                free(payload_dec);
+                                free(sig_dec);
+                                free(payload_b64);
+                                free(sig_b64);
                                 ret_val = ERROR_INVALID_SIGNATURE;
                             } else {
-                                // Verify signature. Server signs using RSA-PSS (Python: padding.PSS + MGF1(SHA256)).
-                                // Use mbedtls_pk_verify_ext with RSASSA-PSS options. Fall back to PKCS#1 v1.5 if needed.
-                                int pss_ret = MBEDTLS_ERR_PK_FEATURE_UNAVAILABLE;
-                                mbedtls_pk_rsassa_pss_options pss_opts;
-                                pss_opts.MBEDTLS_PRIVATE(mgf1_hash_id) = MBEDTLS_MD_SHA256;
-                                pss_opts.MBEDTLS_PRIVATE(expected_salt_len) = MBEDTLS_RSA_SALT_LEN_ANY; // accept any salt (matches PSS.MAX_LENGTH behavior)
+                                // Compute SHA-256 over decoded payload
+                                uint8_t hash[32];
+                                compute_sha256(hash, payload_dec, payload_len);
 
-                                pss_ret = mbedtls_pk_verify_ext(MBEDTLS_PK_RSASSA_PSS, &pss_opts, &pk,
-                                                               MBEDTLS_MD_SHA256, hash, sizeof(hash),
-                                                               sig_dec, sig_len);
-
-                                if (pss_ret == 0) {
-                                    printf("SBOM verifier RSA-PSS signature verified successfully.\n");
-                                    ret_val = SUCCESS;
+                                // Load RSA public key from PEM file (expected at keys/rsa_public.pem)
+                                mbedtls_pk_context pk;
+                                mbedtls_pk_init(&pk);
+                                int pret = mbedtls_pk_parse_public_keyfile(&pk, "keys/rsa_public.pem");
+                                if (pret != 0) {
+                                    char errbuf[200];
+                                    mbedtls_strerror(pret, errbuf, sizeof(errbuf));
+                                    fprintf(stderr, "ERROR: Failed to parse RSA public key (keys/rsa_public.pem): %s\n", errbuf);
+                                    ret_val = ERROR_INVALID_SIGNATURE;
                                 } else {
-                                    // Try PKCS#1 v1.5 as a fallback for backwards compatibility
-                                    int v15_ret = mbedtls_pk_verify(&pk, MBEDTLS_MD_SHA256, hash, sizeof(hash), sig_dec, sig_len);
-                                    if (v15_ret == 0) {
-                                        printf("SBOM verifier RSA (PKCS#1 v1.5) signature verified successfully.\n");
+                                    // Verify signature. Server signs using RSA-PSS (Python: padding.PSS + MGF1(SHA256)).
+                                    // Use mbedtls_pk_verify_ext with RSASSA-PSS options. Fall back to PKCS#1 v1.5 if needed.
+                                    int pss_ret = MBEDTLS_ERR_PK_FEATURE_UNAVAILABLE;
+                                    mbedtls_pk_rsassa_pss_options pss_opts;
+                                    pss_opts.MBEDTLS_PRIVATE(mgf1_hash_id) = MBEDTLS_MD_SHA256;
+                                    pss_opts.MBEDTLS_PRIVATE(expected_salt_len) = MBEDTLS_RSA_SALT_LEN_ANY; // accept any salt (matches PSS.MAX_LENGTH behavior)
+
+                                    pss_ret = mbedtls_pk_verify_ext(MBEDTLS_PK_RSASSA_PSS, &pss_opts, &pk,
+                                                                MBEDTLS_MD_SHA256, hash, sizeof(hash),
+                                                                sig_dec, sig_len);
+
+                                    if (pss_ret == 0) {
+                                        printf("SBOM verifier RSA-PSS signature verified successfully.\n");
                                         ret_val = SUCCESS;
                                     } else {
-                                        char errbuf[200];
-                                        mbedtls_strerror(pss_ret != MBEDTLS_ERR_PK_FEATURE_UNAVAILABLE ? pss_ret : v15_ret, errbuf, sizeof(errbuf));
-                                        fprintf(stderr, "ERROR: RSA signature verification failed: %s\n", errbuf);
-                                        ret_val = ERROR_INVALID_SIGNATURE;
+                                        // Try PKCS#1 v1.5 as a fallback for backwards compatibility
+                                        int v15_ret = mbedtls_pk_verify(&pk, MBEDTLS_MD_SHA256, hash, sizeof(hash), sig_dec, sig_len);
+                                        if (v15_ret == 0) {
+                                            printf("SBOM verifier RSA (PKCS#1 v1.5) signature verified successfully.\n");
+                                            ret_val = SUCCESS;
+                                        } else {
+                                            char errbuf[200];
+                                            mbedtls_strerror(pss_ret != MBEDTLS_ERR_PK_FEATURE_UNAVAILABLE ? pss_ret : v15_ret, errbuf, sizeof(errbuf));
+                                            fprintf(stderr, "ERROR: RSA signature verification failed: %s\n", errbuf);
+                                            ret_val = ERROR_INVALID_SIGNATURE;
+                                        }
                                     }
                                 }
+                                mbedtls_pk_free(&pk);
+                                // Delay freeing decoded buffers until after we extract status/count from payload_dec
                             }
-                            mbedtls_pk_free(&pk);
-                            // Delay freeing decoded buffers until after we extract status/count from payload_dec
                         }
+                    } else {
+                        fprintf(stderr, "ERROR: SBOM verifier response missing 'payload' or 'signature' fields. Response: %s\n", chunk.memory);
+                        if (payload_b64) free(payload_b64);
+                        if (sig_b64) free(sig_b64);
+                        ret_val = ERROR_INVALID_MANIFEST;
                     }
-                } else {
-                    fprintf(stderr, "ERROR: SBOM verifier response missing 'payload' or 'signature' fields. Response: %s\n", chunk.memory);
-                    if (payload_b64) free(payload_b64);
-                    if (sig_b64) free(sig_b64);
-                    ret_val = ERROR_INVALID_MANIFEST;
-                }
 
-                // Extract status and vulnerability_count from the decoded payload (payload_dec)
-                if (payload_b64 && sig_b64 && payload_dec) {
-                    char *payload_str = (char *)payload_dec; // already null-terminated earlier
+                    // Extract status and vulnerability_count from the decoded payload (payload_dec)
+                    if (payload_b64 && sig_b64 && payload_dec) {
+                        char *payload_str = (char *)payload_dec; // already null-terminated earlier
 
-                    char *ptr_vulnerability_count = strstr(payload_str, "'vulnerability_count':");
-                    char *ptr_status_success = strstr(payload_str, "'status': 'success'");
-                    char *ptr_status_error = strstr(payload_str, "'status': 'error'");
+                        uint8_t status = (uint8_t)(*payload_str);
 
-                    if (ptr_status_success && ptr_vulnerability_count) {
-                        int vulnerability_count = -1;
-                        if (sscanf(ptr_vulnerability_count + strlen("'vulnerability_count':"), "%d", &vulnerability_count) == 1) {
-                            printf("SBOM Server: Parsed vulnerability_count: %d\n", vulnerability_count);
+                        if (status) {
+
+                            uint32_t vulnerability_count = (uint32_t)(*(uint32_t *)(payload_str + 1));
+                            
                             if (vulnerability_count == 0) {
                                 ret_val = SUCCESS;
                                 printf("SBOM successfully verified with 0 vulnerabilities. ✅\n");
                             } else if (vulnerability_count > 0) {
                                 fprintf(stderr, "ERROR: SBOM verification found %d vulnerabilities. ⚠️\n", vulnerability_count);
                                 ret_val = ERROR_SBOM_VALIDATION_FAILED;
-                            } else {
-                                fprintf(stderr, "ERROR: SBOM server returned an unexpected vulnerability_count (%d) despite success status. 🧐\n", vulnerability_count);
-                                ret_val = ERROR_SBOM_VALIDATION_FAILED;
                             }
-                        } else {
-                            fprintf(stderr, "ERROR: Failed to parse vulnerability_count from SBOM payload. Payload format unexpected. 📄❌\n");
-                            ret_val = ERROR_INVALID_MANIFEST;
-                        }
-                    } else if (ptr_status_error) {
-                        fprintf(stderr, "ERROR: SBOM verification server reported an error. Payload: %s\n", payload_str);
-                        ret_val = ERROR_SBOM_VALIDATION_FAILED;
-                    } else {
-                        fprintf(stderr, "ERROR: SBOM server payload missing expected 'status' or 'vulnerability_count' fields. Payload: %s\n", payload_str);
-                        ret_val = ERROR_INVALID_MANIFEST;
-                    }
-                } else {
-                    // If decoded payload isn't available, fall back to parsing the raw response body
-                    char *ptr_vulnerability_count = strstr(chunk.memory, "'vulnerability_count':");
-                    char *ptr_status_success = strstr(chunk.memory, "'status': 'success'");
-                    char *ptr_status_error = strstr(chunk.memory, "'status': 'error'");
 
-                    if (ptr_status_success && ptr_vulnerability_count) {
-                        int vulnerability_count = -1;
-                        if (sscanf(ptr_vulnerability_count + strlen("'vulnerability_count':"), "%d", &vulnerability_count) == 1) {
-                            if (vulnerability_count == 0) {
-                                ret_val = SUCCESS;
-                            } else if (vulnerability_count > 0) {
-                                ret_val = ERROR_SBOM_VALIDATION_FAILED;
-                            } else {
-                                ret_val = ERROR_SBOM_VALIDATION_FAILED;
-                            }
                         } else {
-                            ret_val = ERROR_INVALID_MANIFEST;
+                            char *error_message = payload_str + 1;
+                            fprintf(stderr, "ERROR: SBOM verification failed. Server error message: %s\n", error_message);
+                            ret_val = ERROR_SBOM_VALIDATION_FAILED;
                         }
-                    } else if (ptr_status_error) {
-                        ret_val = ERROR_SBOM_VALIDATION_FAILED;
-                    } else {
-                        ret_val = ERROR_INVALID_MANIFEST;
                     }
+
+                    // Free decoded buffers and base64 strings now that parsing is done
+                    if (payload_b64) { free(payload_b64); payload_b64 = NULL; }
+                    if (sig_b64) { free(sig_b64); sig_b64 = NULL; }
+                    if (sig_dec) { free(sig_dec); sig_dec = NULL; }
+                    if (payload_dec) { free(payload_dec); payload_dec = NULL; }
                 }
-
-                // Free decoded buffers and base64 strings now that parsing is done
-                if (payload_b64) { free(payload_b64); payload_b64 = NULL; }
-                if (sig_b64) { free(sig_b64); sig_b64 = NULL; }
-                if (sig_dec) { free(sig_dec); sig_dec = NULL; }
-                if (payload_dec) { free(payload_dec); payload_dec = NULL; }
             } else {
                  fprintf(stderr, "ERROR: SBOM verification failed with HTTP code %ld or no response body. 🌐💥\n", http_code);
                  ret_val = ERROR_NET; // Or map specific HTTP errors
