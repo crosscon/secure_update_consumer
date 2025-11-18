@@ -1,9 +1,18 @@
 
 # Also see "include/mbedtls/mbedtls_config.h"
 
-CFLAGS	?= -O2
+ifdef CROSS_COMPILE_PREFIX
+CC = ${CROSS_COMPILE_PREFIX}gcc
+AR = ${CROSS_COMPILE_PREFIX}ar
+LD = ${CROSS_COMPILE_PREFIX}ld
+CFLAGS = --sysroot ${CROSS_COMPILE_SYSROOT}
+LDFLAGS = --sysroot ${CROSS_COMPILE_SYSROOT}
+else
+CC?=cc
+AR?=ar
+endif
+
 WARNING_CFLAGS ?=  -Wall -Wextra -Wformat=2 -Wno-format-nonliteral
-LDFLAGS ?=
 
 # Include ../include for public headers and . for private headers.
 # Note that . needs to be included explicitly for the sake of library
@@ -284,7 +293,7 @@ libmbedcrypto.dll: $(OBJS_CRYPTO)
 	$(CC) -shared -Wl,-soname,$@ -Wl,--out-implib,$@.a -o $@ $(OBJS_CRYPTO) -lws2_32 -lwinmm -lgdi32 -static-libgcc $(LOCAL_LDFLAGS) $(LDFLAGS)
 
 .c.o:
-	echo "  CC    $<"
+	echo "  $(CC) $(LOCAL_CFLAGS) $(CFLAGS) -o $@ -c $<"
 	$(CC) $(LOCAL_CFLAGS) $(CFLAGS) -o $@ -c $<
 
 .PHONY: generated_files

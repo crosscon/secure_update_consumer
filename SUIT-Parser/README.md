@@ -60,6 +60,17 @@ SUIT-Parser$ make
  ./out/secure_update extract-sbom ../examples/signed-example1.json.suit --key=../examples/public_key.pem
 ```
 
+### Cross compilation
+
+In order to cross-compile this tool easily, you will need a compiler toolchain and the target device's sysroot containing the `libcoap` library.
+Otherwise, you can also cross-compile it along with the tool, but you will probably have to tweak the Makefiles.
+
+Set the two environment variables consumed by the Makefiles `CROSS_COMPILE_PREFIX` and `CROSS_COMPILE_SYSROOT`, where the former points to a compiler toolchain for the target platform and the latter points to the target's root filesystem.
+
+```bash
+$ CROSS_COMPILE_PREFIX=/path/to/toolchain/aarch64-linux-gnu- CROSS_COMPILE_SYSROOT=/path/to/sysroot make
+```
+
 ## Test enviroment
 
 The parser was tested both on x86 and ARM architectures. In particular, for ARM the choice was to:

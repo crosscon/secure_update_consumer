@@ -1,6 +1,15 @@
 
 # To compile on SunOS: add "-lsocket -lnsl" to LDFLAGS
 
+ifdef CROSS_COMPILE_PREFIX
+CC = ${CROSS_COMPILE_PREFIX}gcc
+AR = ${CROSS_COMPILE_PREFIX}ar
+LD = ${CROSS_COMPILE_PREFIX}ld
+else
+CC?=cc
+AR?=ar
+endif
+
 CFLAGS	?= -O2
 WARNING_CFLAGS ?= -Wall -Wextra -Wformat=2 -Wno-format-nonliteral
 WARNING_CXXFLAGS ?= -Wall -Wextra -Wformat=2 -Wno-format-nonliteral

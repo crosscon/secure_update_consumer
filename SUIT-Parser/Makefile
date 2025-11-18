@@ -17,8 +17,18 @@
 # limitations under the License.
 # ----------------------------------------------------------------------------
 
+ifdef CROSS_COMPILE_PREFIX
+$(info Cross compiling with prefix: ${CROSS_COMPILE_PREFIX} and sysroot: ${CROSS_COMPILE_SYSROOT})
+CC = ${CROSS_COMPILE_PREFIX}gcc
+AR = ${CROSS_COMPILE_PREFIX}ar
+LD = ${CROSS_COMPILE_PREFIX}ld
+CFLAGS = --sysroot ${CROSS_COMPILE_SYSROOT}
+LDFLAGS = --sysroot ${CROSS_COMPILE_SYSROOT}
+else
 CC?=cc
 AR?=ar
+endif
+
 
 OUT?=./out
 MBEDTLS_PATH?=./mbedtls
@@ -70,17 +80,23 @@ endif
 # Common names: libcoap-2, libcoap-2-posix, libcoap-3, libcoap-3-posix
 # For DTLS support, you might need libcoap-2-gnutls, libcoap-2-openssl, etc.
 # Check with: pkg-config --list-all | grep libcoap
-LIBCOAP_PKG_NAME?=libcoap-3-openssl # Default, user can override by setting LIBCOAP_PKG_NAME in their environment or command line
-ifeq ($(PKG_CONFIG_PATH),)
-  $(warning "pkg-config not found, libcoap flags may be incorrect.")
-  LIBCOAP_CFLAGS=
-  LIBCOAP_LIBS=-lcoap-2 # Fallback: attempt to link directly (adjust if needed)
+ifndef CROSS_COMPILE_PREFIX
+	LIBCOAP_PKG_NAME?=libcoap-3-openssl # Default, user can override by setting LIBCOAP_PKG_NAME in their environment or command line
+	ifeq ($(PKG_CONFIG_PATH),)
+	$(warning "pkg-config not found, libcoap flags may be incorrect.")
+	LIBCOAP_CFLAGS=
+	LIBCOAP_LIBS=-lcoap-2 # Fallback: attempt to link directly (adjust if needed)
+	else
+	LIBCOAP_CFLAGS := $(shell pkg-config --cflags $(LIBCOAP_PKG_NAME))
+	LIBCOAP_LIBS := $(shell pkg-config --libs $(LIBCOAP_PKG_NAME))
+	ifeq ($(LIBCOAP_CFLAGS)$(LIBCOAP_LIBS), )
+		$(error "pkg-config could not find $(LIBCOAP_PKG_NAME). Please install libcoap development package (e.g., libcoap-2-dev or equivalent) and ensure '$(LIBCOAP_PKG_NAME)' is the correct pkg-config name.")
+	endif
+	endif
 else
-  LIBCOAP_CFLAGS := $(shell pkg-config --cflags $(LIBCOAP_PKG_NAME))
-  LIBCOAP_LIBS := $(shell pkg-config --libs $(LIBCOAP_PKG_NAME))
-  ifeq ($(LIBCOAP_CFLAGS)$(LIBCOAP_LIBS), )
-    $(error "pkg-config could not find $(LIBCOAP_PKG_NAME). Please install libcoap development package (e.g., libcoap-2-dev or equivalent) and ensure '$(LIBCOAP_PKG_NAME)' is the correct pkg-config name.")
-  endif
+# For cross-compilation, assume libcoap is in the sysroot and user provides correct CFLAGS and LDFLAGS
+	LIBCOAP_CFLAGS=
+	LIBCOAP_LIBS=-lcoap-3-gnutls # Adjust based on your cross-compiled libcoap variant
 endif
 # --- End libcoap flags ---
 
@@ -128,7 +144,7 @@ ${ABS_OUT}%.o: %.c
 ${SECURE_UPDATE_EXEC}: ${MBEDTLS_LIB} ${SUIT_LIB} $(addprefix ${ABS_OUT}, $(MAIN_SRCS:.c=.o))
 	${Q}echo "Linking secure_update executable..."
 #${Q}${CC} -o $@ $(addprefix ${ABS_OUT}, $(MAIN_SRCS:.c=.o)) ${SUIT_LIB} ${CBOR_LIB} ${MBEDTLS_LIB} -lm -lcurl
-	${Q}${CC} -o $@ $(addprefix ${ABS_OUT}, $(MAIN_SRCS:.c=.o)) ${SUIT_LIB} ${CBOR_LIB} ${MBEDTLS_LIB} -lm ${CURL_LIBS} ${LIBCOAP_LIBS}
+	${Q}${CC} -o $@ $(addprefix ${ABS_OUT}, $(MAIN_SRCS:.c=.o)) ${LDFLAGS} ${SUIT_LIB} ${CBOR_LIB} ${MBEDTLS_LIB} -lm ${CURL_LIBS} ${LIBCOAP_LIBS}
 
 .PHONY: executable
 executable: ${SECURE_UPDATE_EXEC}

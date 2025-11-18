@@ -18,8 +18,17 @@
 # ----------------------------------------------------------------------------
 
 
+ifdef CROSS_COMPILE_PREFIX
+${Q}echo "Cross compiling with prefix: ${CROSS_COMPILE_PREFIX_PREFIX} and sysroot: ${CROSS_COMPILE_PREFIX_SYSROOT}"
+CC = ${CROSS_COMPILE_PREFIX_PREFIX}gcc
+AR = ${CROSS_COMPILE_PREFIX_PREFIX}ar
+LD = ${CROSS_COMPILE_PREFIX_PREFIX}ld
+CFLAGS = --sysroot ${CROSS_COMPILE_PREFIX_SYSROOT}
+LDFLAGS = --sysroot ${CROSS_COMPILE_PREFIX_SYSROOT}
+else
 CC?=cc
 AR?=ar
+endif
 
 OUT?=../../out/test/unit/
 SRC_ROOT?=$(abspath ../../source)

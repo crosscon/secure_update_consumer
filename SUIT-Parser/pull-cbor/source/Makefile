@@ -17,8 +17,17 @@
 # limitations under the License.
 # ----------------------------------------------------------------------------
 
+ifdef CROSS_COMPILE_PREFIX
+$(info Cross compiling with prefix: ${CROSS_COMPILE_PREFIX} and sysroot: ${CROSS_COMPILE_SYSROOT})
+CC = ${CROSS_COMPILE_PREFIX}gcc
+AR = ${CROSS_COMPILE_PREFIX}ar
+LD = ${CROSS_COMPILE_PREFIX}ld
+CFLAGS = --sysroot ${CROSS_COMPILE_SYSROOT}
+LDFLAGS = --sysroot ${CROSS_COMPILE_SYSROOT}
+else
 CC?=cc
 AR?=ar
+endif
 
 OUT?=../out/
 
