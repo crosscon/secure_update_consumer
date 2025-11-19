@@ -231,6 +231,15 @@ void cleanup_resources() {
     }    
 }
 
+void compute_sha256(uint8_t *hash, const uint8_t *msg, size_t msg_len) {
+    mbedtls_sha256_context ctx;
+    mbedtls_sha256_init (&ctx);
+    mbedtls_sha256_starts(&ctx, 0);
+    mbedtls_sha256_update(&ctx, msg, msg_len);
+    mbedtls_sha256_finish(&ctx, hash);
+    mbedtls_sha256_free(&ctx);
+}
+
 // Print property ids 
 void print_property_ids() {
     printf("Property IDs: ");
@@ -253,13 +262,13 @@ struct MemoryStructForResponse {
     size_t size;
 };
 
-int verify_server_response(const char *response, size_t response_size, char **decoded_payload_out) {
+int verify_server_response(const char *response, size_t response_size, const uint8_t *expected_hash, char **decoded_payload_out) {
 
     int ret_val = ERROR_INVALID_MANIFEST;
 
     char *payload_b64 = NULL;
     char *sig_b64 = NULL;
-    char *pstart = response + 1; // exclude starting quote
+    const char *pstart = response + 1; // exclude starting quote
     char *pend = strchr(pstart, '.');
     if (!pend) {
         fprintf(stderr, "ERROR: SBOM verifier response format invalid (missing signature part). Response: %s\n", response);
@@ -336,8 +345,13 @@ int verify_server_response(const char *response, size_t response_size, char **de
 
                         if (pss_ret == 0) {
                             printf("RSA-PSS signature verified successfully.\n");
-                            *decoded_payload_out = payload_dec; // Return decoded payload
-                            ret_val = SUCCESS;
+                            if (memcmp(payload_dec, expected_hash, 32) != 0) {
+                                fprintf(stderr, "ERROR: Payload hash does not match expected hash.\n");
+                                ret_val = ERROR_INVALID_MANIFEST;
+                            } else {
+                                *decoded_payload_out = payload_dec + 32; // Return decoded payload
+                                ret_val = SUCCESS;
+                            }
                         }
                     }
                     mbedtls_pk_free(&pk);
@@ -384,28 +398,21 @@ int send_sbom_to_verifier(const uint8_t *base64_sbom_data, size_t base64_sbom_si
         return SUCCESS; // Or an error if SBOM is mandatory for validation
     }
 
-    // Step 1: Create a null-terminated version of the Base64 SBOM for base64_decode
-    char *null_terminated_b64_sbom = malloc(base64_sbom_size + 1);
-    if (!null_terminated_b64_sbom) {
-        fprintf(stderr, "ERROR: Failed to allocate memory for null-terminated SBOM string.\n");
-        return ERROR_MEM;
-    }
-    memcpy(null_terminated_b64_sbom, base64_sbom_data, base64_sbom_size);
-    null_terminated_b64_sbom[base64_sbom_size] = '\0';
-
     // Step 2: Decode the Base64 SBOM
-    // The existing base64_decode takes a `const uint8_t*` (presumably null-terminated C string)
-    // and returns a `uint8_t*` (newly allocated buffer with decoded data).
-    uint8_t *decoded_sbom_content = base64_decode((const uint8_t*)null_terminated_b64_sbom);
-    free(null_terminated_b64_sbom); // Free the temporary null-terminated string
-
-    if (!decoded_sbom_content) {
-        fprintf(stderr, "ERROR: Failed to decode SBOM from Base64.\n");
-        return ERROR_INVALID_MANIFEST; // Or a more specific SBOM error
+    size_t decoded_max_size = base64_sbom_size * 3 / 4 + 4; // Approximate size after base64 decoding
+    uint8_t *decoded = (uint8_t *)malloc(decoded_max_size);
+    size_t decoded_size = 0;
+    int bret = mbedtls_base64_decode(decoded, decoded_max_size, &decoded_size, base64_sbom_data, base64_sbom_size);
+    if (bret != 0) {
+        char errbuf[200];
+        mbedtls_strerror(bret, errbuf, sizeof(errbuf));
+        printf("Failed to decode SBOM from base64: %s\n", errbuf);
+        free(decoded);
+        return ERROR_INVALID_MANIFEST;
     }
 
-    // Step 3: Compute decoded size.
-    size_t decoded_sbom_len = strlen((char*)decoded_sbom_content);
+    uint8_t sbom_sha256[32];
+    compute_sha256(sbom_sha256, decoded, decoded_size);
 
     CURL *curl;
     CURLcode res_curl;
@@ -422,7 +429,7 @@ int send_sbom_to_verifier(const uint8_t *base64_sbom_data, size_t base64_sbom_si
 
     if (chunk.memory == NULL) {
         fprintf(stderr, "ERROR: Failed to allocate initial memory for SBOM verifier response.\n");
-        free(decoded_sbom_content);
+        free(decoded);
         return ERROR_MEM;
     }
 
@@ -435,8 +442,8 @@ int send_sbom_to_verifier(const uint8_t *base64_sbom_data, size_t base64_sbom_si
     curl_formadd(&formpost, &lastptr,
                  CURLFORM_COPYNAME, "file",              // Name of the form field
                  CURLFORM_BUFFER, "sbom_file",          // "filename" for the server
-                 CURLFORM_BUFFERPTR, decoded_sbom_content,
-                 CURLFORM_BUFFERLENGTH, decoded_sbom_len, // Use the (approximated) actual decoded length
+                 CURLFORM_BUFFERPTR, decoded,
+                 CURLFORM_BUFFERLENGTH, decoded_size, // Use the (approximated) actual decoded length
                  CURLFORM_END);
 
     curl = curl_easy_init();
@@ -471,7 +478,7 @@ int send_sbom_to_verifier(const uint8_t *base64_sbom_data, size_t base64_sbom_si
                 
                 char *payload_str = NULL;
 
-                int signature_verification_status = verify_server_response(chunk.memory, chunk.size, &payload_str);
+                int signature_verification_status = verify_server_response(chunk.memory, chunk.size, sbom_sha256, &payload_str);
 
                 if (signature_verification_status != SUCCESS) {
                     fprintf(stderr, "ERROR: SBOM verifier response signature verification failed.\n");
@@ -520,7 +527,7 @@ int send_sbom_to_verifier(const uint8_t *base64_sbom_data, size_t base64_sbom_si
 
     curl_global_cleanup(); // Counterpart to curl_global_init
     if (chunk.memory) free(chunk.memory);
-    free(decoded_sbom_content); // Free the buffer allocated by base64_decode
+    free(decoded); // Free the buffer allocated by base64_decode
 
     return ret_val;
 }
@@ -536,6 +543,9 @@ int send_proof_to_verifier(const uint8_t *proof_data, size_t proof_size) {
         printf("No proof data to send for verification.\n");
         return ERROR_INVALID_PROOF;
     }
+
+    uint8_t proof_sha256[32];
+    compute_sha256(proof_sha256, proof_data, proof_size);
 
     CURL *curl;
     CURLcode res_curl;
@@ -600,7 +610,7 @@ int send_proof_to_verifier(const uint8_t *proof_data, size_t proof_size) {
                 
                 char *payload_str = NULL;
 
-                int signature_verification_status = verify_server_response(chunk.memory, chunk.size, &payload_str);
+                int signature_verification_status = verify_server_response(chunk.memory, chunk.size, proof_sha256, &payload_str);
 
                 if (signature_verification_status != SUCCESS) {
                     fprintf(stderr, "ERROR: Proof verifier response signature verification failed.\n");
@@ -969,15 +979,6 @@ void x_print(const uint8_t *p, size_t n) {
     for (size_t i = 0; i < n; i++) {
         printf("%02x", p[i]);
     }
-}
-
-void compute_sha256(uint8_t *hash, const uint8_t *msg, size_t msg_len) {
-    mbedtls_sha256_context ctx;
-    mbedtls_sha256_init (&ctx);
-    mbedtls_sha256_starts(&ctx, 0);
-    mbedtls_sha256_update(&ctx, msg, msg_len);
-    mbedtls_sha256_finish(&ctx, hash);
-    mbedtls_sha256_free(&ctx);
 }
 
 int mbedtls_md_helper(
