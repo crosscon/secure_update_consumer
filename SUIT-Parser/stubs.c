@@ -56,6 +56,7 @@
 #define ERROR_MEM 5
 #define ERROR_SBOM_VALIDATION_FAILED 6 // New error code for SBOM
 #define ERROR_SYSTEM 7 // System error (e.g. file operations)
+#define ERROR_PROOF_VALIDATION_FAILED 8 // New error code for Proof validation
 
 // --- Error Codes (Example) --- TODO harmonize with the above
 #define SUIT_ERR_OK                   0
@@ -244,6 +245,7 @@ void print_property_ids() {
 
 // --- SBOM Verifier ---
 #define SBOM_VERIFIER_URL "http://sbomverifier.com:8000/verify-sbom"
+#define PROOF_VERIFIER_URL "http://sbomverifier.com:8001/verify-proof"
 
 // Structure for libcurl response for SBOM verifier
 struct MemoryStructForResponse {
@@ -523,6 +525,127 @@ int send_sbom_to_verifier(const uint8_t *base64_sbom_data, size_t base64_sbom_si
     return ret_val;
 }
 
+int send_proof_to_verifier(const uint8_t *proof_data, size_t proof_size) {
+    // printf("Sending %zu bytes of proof data to verifier.\n", proof_size);
+    // for(int i = 0; i < proof_size; i++) {
+    //     printf("%c", proof_data[i]);
+    // }
+    // printf("\n");
+
+    if (proof_data == NULL || proof_size == 0) {
+        printf("No proof data to send for verification.\n");
+        return ERROR_INVALID_PROOF;
+    }
+
+    CURL *curl;
+    CURLcode res_curl;
+    int ret_val = ERROR_NET; // Default to network/fetch error
+
+    struct curl_httppost *formpost = NULL;
+    struct curl_httppost *lastptr = NULL;
+    struct curl_slist *headerlist = NULL;
+    static const char expect_buf[] = "Expect:"; // To disable Expect: 100-continue
+
+    struct MemoryStructForResponse chunk;
+    chunk.memory = malloc(1); // Will be grown by realloc in callback
+    chunk.size = 0;
+
+    if (chunk.memory == NULL) {
+        fprintf(stderr, "ERROR: Failed to allocate initial memory for Proof verifier response.\n");
+        return ERROR_MEM;
+    }
+
+    // curl_global_init should ideally be called once per program.
+    // Calling it here for simplicity makes the function self-contained.
+    // If this function is called many times, move curl_global_init/cleanup outside.
+    curl_global_init(CURL_GLOBAL_ALL);
+
+    // Prepare multipart form data
+    curl_formadd(&formpost, &lastptr,
+                 CURLFORM_COPYNAME, "file",              // Name of the form field
+                 CURLFORM_BUFFER, "proof_file",          // "filename" for the server
+                 CURLFORM_BUFFERPTR, proof_data,
+                 CURLFORM_BUFFERLENGTH, proof_size, // Use the (approximated) actual decoded length
+                 CURLFORM_END);
+
+    curl = curl_easy_init();
+    if (curl) {
+        headerlist = curl_slist_append(headerlist, expect_buf);
+
+        curl_easy_setopt(curl, CURLOPT_URL, PROOF_VERIFIER_URL);
+        curl_easy_setopt(curl, CURLOPT_HTTPPOST, formpost);
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headerlist); // Optional: if suppressing Expect
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallbackForSBOMResponse);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
+        curl_easy_setopt(curl, CURLOPT_USERAGENT, "suit-client/1.0-proof");
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 45L); // 45 seconds timeout for SBOM verification
+        curl_easy_setopt(curl, CURLOPT_VERBOSE, 0L); // Set to 1L for curl debug output
+
+        printf("Sending Proof to: %s\n", PROOF_VERIFIER_URL);
+        res_curl = curl_easy_perform(curl);
+
+        if (res_curl != CURLE_OK) {
+            fprintf(stderr, "ERROR: Proof verification curl_easy_perform() failed: %s\n", curl_easy_strerror(res_curl));
+            ret_val = ERROR_NET;
+        } else {
+            long http_code = 0;
+            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+            printf("Proof Verifier Response - HTTP Code: %ld\n", http_code);
+            printf("Proof Verifier Response - Body: %s\n", chunk.memory ? chunk.memory : "[empty]");
+
+            if (http_code == 200 && chunk.memory) {
+                // Basic JSON parsing
+                // Expected response format:
+                // base64_encoded_payload.base64_encoded_signature
+                
+                char *payload_str = NULL;
+
+                int signature_verification_status = verify_server_response(chunk.memory, chunk.size, &payload_str);
+
+                if (signature_verification_status != SUCCESS) {
+                    fprintf(stderr, "ERROR: Proof verifier response signature verification failed.\n");
+                    ret_val = ERROR_PROOF_VALIDATION_FAILED;
+                } else {
+
+                    // The base64_encoded_payload contains binary fields:
+                    // success: (byte) 1
+                    // error: (byte) 0 | (string) error_message
+
+                    uint8_t status = (uint8_t)(*payload_str);
+
+                    if (status) {
+
+                        printf("Proof successfully verified. ✅\n");
+                        ret_val = SUCCESS;
+
+                    } else {
+                        char *error_message = payload_str + 1;
+                        fprintf(stderr, "ERROR: Proof verification failed. Server error message: %s\n", error_message);
+                        ret_val = ERROR_PROOF_VALIDATION_FAILED;
+                    }
+                    
+                    if (payload_str) { free(payload_str); payload_str = NULL; }
+                }
+            } else {
+                 fprintf(stderr, "ERROR: Proof verification failed with HTTP code %ld or no response body. 🌐💥\n", http_code);
+                 ret_val = ERROR_NET; // Or map specific HTTP errors
+            }
+        }
+
+        curl_easy_cleanup(curl);
+        curl_formfree(formpost); // Clean up the formpost chain
+        curl_slist_free_all(headerlist); // Clean up the header list
+    } else {
+        fprintf(stderr, "ERROR: curl_easy_init() failed for Proof verification.\n");
+        // ret_val is already ERROR_NET or could be ERROR_MEM
+    }
+
+    curl_global_cleanup(); // Counterpart to curl_global_init
+    if (chunk.memory) free(chunk.memory);
+
+    return ret_val;
+}
+
 
 // TA API to validate the manifest and the proofs inside it
 // The proofs are validated either on the device or on the server, based on the locality constraint
@@ -577,48 +700,60 @@ uint8_t TA_CROSSCON_VALIDATE_MANIFEST(const uint8_t *manifest, size_t manifest_s
     // Verify the proofs 
     for (size_t i = 0; i < property_ids_count; i++) {
         // Check the locality constraint
+        // Build the filename starting from the property ID: file name start is on path out/proofs/
+        char filename[100];
+        size_t offset = snprintf(filename, sizeof(filename), "out/proofs/");
+        for (size_t j = 0; j < UUID_SIZE; j++) {
+            offset += snprintf(filename + offset, sizeof(filename) - offset, "%02x", property_ids[i].bytes[j]);
+        }
+        offset += snprintf(filename + offset, sizeof(filename) - offset, ".cpc.gz");
+        printf("Proof Certificate Filename: %s\n", filename);
+
+        // Load the proof certificate
+        FILE *f = fopen(filename, "rb");
+        if (f == NULL) {
+            printf("Failed to open proof certificate file\n");
+            return ERROR_INVALID_PROOF;
+        }
+
+        // Read the proof certificate
+        fseek(f, 0, SEEK_END);
+        size_t proof_size = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        uint8_t *proof = malloc(proof_size);
+        if (proof == NULL) {
+            printf("Failed to allocate memory for proof certificate\n");
+            fclose(f);
+            return ERROR_INVALID_PROOF;
+        }
+        size_t read = fread(proof, 1, proof_size, f);
+        fclose(f);
+
+        if (read != proof_size) {
+            printf("Failed to read proof certificate\n");
+            free(proof);
+            return ERROR_INVALID_PROOF;
+        }
+
+        size_t decoded_max_size = proof_size * 3 / 4 + 4; // Approximate size after base64 decoding
+        uint8_t *decoded = (uint8_t *)malloc(decoded_max_size);
+        size_t decoded_size = 0;
+        int bret = mbedtls_base64_decode(decoded, decoded_max_size, &decoded_size, proof, proof_size);
+        if (bret != 0) {
+            char errbuf[200];
+            mbedtls_strerror(bret, errbuf, sizeof(errbuf));
+            printf("Failed to decode proof certificate from base64: %s\n", errbuf);
+            free(proof);
+            free(decoded);
+            return ERROR_INVALID_PROOF;
+        }
+
         if (property_ids[i].locality_constraint == 1) {
             printf("Verification of the proof on device\n");
 
-            // Build the filename starting from the property ID: file name start is on path out/proofs/
-            char filename[100];
-            size_t offset = snprintf(filename, sizeof(filename), "out/proofs/");
-            for (size_t j = 0; j < UUID_SIZE; j++) {
-                offset += snprintf(filename + offset, sizeof(filename) - offset, "%02x", property_ids[i].bytes[j]);
-            }
-            offset += snprintf(filename + offset, sizeof(filename) - offset, ".cpc.gz");
-            printf("Proof Certificate Filename: %s\n", filename);
-
-            // Load the proof certificate
-            FILE *f = fopen(filename, "rb");
-            if (f == NULL) {
-                printf("Failed to open proof certificate file\n");
-                return ERROR_INVALID_PROOF;
-            }
-
-            // Read the proof certificate
-            fseek(f, 0, SEEK_END);
-            size_t proof_size = ftell(f);
-            fseek(f, 0, SEEK_SET);
-            uint8_t *proof = malloc(proof_size);
-            if (proof == NULL) {
-                printf("Failed to allocate memory for proof certificate\n");
-                fclose(f);
-                return ERROR_INVALID_PROOF;
-            }
-            size_t read = fread(proof, 1, proof_size, f);
-            fclose(f);
-
-            if (read != proof_size) {
-                printf("Failed to read proof certificate\n");
-                free(proof);
-                return ERROR_INVALID_PROOF;
-            }
-
             // Decode the proof certificate from base64 and write it to the same file
-            uint8_t *decoded = base64_decode(proof);
             f = fopen(filename, "wb");
-            fwrite(decoded, sizeof(__uint8_t) * (strlen(proof) * 3 / 4), 1, f);
+            fwrite(decoded, decoded_size, 1, f);
             fclose(f);
                         
             // Free the proof memory as we've written it to file
@@ -635,6 +770,7 @@ uint8_t TA_CROSSCON_VALIDATE_MANIFEST(const uint8_t *manifest, size_t manifest_s
             int status = system(command);
             if (status != 0) {
                 perror("Error unzipping proof certificate");
+                free(decoded);
                 return ERROR_INVALID_PROOF;
             }
 
@@ -649,13 +785,22 @@ uint8_t TA_CROSSCON_VALIDATE_MANIFEST(const uint8_t *manifest, size_t manifest_s
                 printf("Proof certificate verified successfully\n");
             } else {
                 printf("Proof certificate verification failed -- skipped!! --\n");
-                //return ERROR_INVALID_PROOF;
+                free(decoded);
+                return ERROR_INVALID_PROOF;
             }
         } else {
             printf("Verification of the proof on server\n");
-            printf("TODO: Implement server verification\n");
-            // TODO 
+
+            int proof_verification_status = send_proof_to_verifier(decoded, decoded_size);
+
+            if (proof_verification_status != SUCCESS) {
+                fprintf(stderr, "ERROR: Proof verification failed with code %d.\n", proof_verification_status);
+                free(decoded);
+                return ERROR_INVALID_PROOF;
+            }
+            printf("INFO: Proof verification successful.\n");
         }
+        free(decoded);
     }
 
     return SUCCESS;
