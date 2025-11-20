@@ -1,0 +1,35 @@
+(include "../programs/Utils.eo")
+(include "../programs/Nary.eo")
+
+(include "../theories/Arith.eo")
+
+; disclaimer: >
+;   This function is a builtin function symbol of SMT-LIB denoting
+;   universal quantification. We represent it as an ordinary function taking a
+;   list as the first child to model cvc5's treatment of quantified formulas.
+(declare-const forall (-> @List Bool Bool) :binder @list)
+
+; disclaimer: >
+;   This function is a builtin function symbol of SMT-LIB denoting
+;   existential quantification. We represent it as an ordinary function taking a
+;   list as the first child to model cvc5's treatment of quantified formulas.
+(declare-const exists (-> @List Bool Bool) :binder @list)
+
+; program: $get_var_list
+; args:
+; - F Bool: The quantified formula.
+; return: >
+;   The variable list for F.
+(program $get_var_list ((Q (-> @List Bool Bool)) (xs @List) (G Bool) (i Int))
+  :signature (Bool) @List
+  (
+    (($get_var_list (Q xs G)) xs)
+  )
+)
+
+; skolems
+(declare-parameterized-const @quantifiers_skolemize ((F Bool :opaque) (i Int :opaque))
+  ($assoc_nil_nth_type @list ($get_var_list F) i))
+
+(declare-parameterized-const @witness_inv_condition ((F Bool :opaque))
+  ($assoc_nil_nth_type @list ($get_var_list F) 0))

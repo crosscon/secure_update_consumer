@@ -271,7 +271,7 @@ int verify_server_response(const char *response, size_t response_size, const uin
     const char *pstart = response + 1; // exclude starting quote
     char *pend = strchr(pstart, '.');
     if (!pend) {
-        fprintf(stderr, "ERROR: SBOM verifier response format invalid (missing signature part). Response: %s\n", response);
+        fprintf(stderr, "ERROR: response format invalid (missing signature part). Response: %s\n", response);
         return ERROR_INVALID_MANIFEST;
     } else {
         payload_b64 = strndup(pstart, pend - pstart); // Exclude the dot
@@ -280,8 +280,8 @@ int verify_server_response(const char *response, size_t response_size, const uin
         sig_b64 = strdup(sstart);
         sig_b64[strcspn(sig_b64, "\"")] = '\0'; // Exclude trailing quote
 
-        printf("Extracted payload (base64): %s\n", payload_b64);
-        printf("Extracted signature (base64): %s\n", sig_b64);
+        // printf("Extracted payload (base64): %s\n", payload_b64);
+        // printf("Extracted signature (base64): %s\n", sig_b64);
 
         uint8_t *payload_dec;
         uint8_t *sig_dec;
@@ -469,7 +469,7 @@ int send_sbom_to_verifier(const uint8_t *base64_sbom_data, size_t base64_sbom_si
             long http_code = 0;
             curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
             printf("SBOM Verifier Response - HTTP Code: %ld\n", http_code);
-            printf("SBOM Verifier Response - Body: %s\n", chunk.memory ? chunk.memory : "[empty]");
+            // printf("SBOM Verifier Response - Body: %s\n", chunk.memory ? chunk.memory : "[empty]");
 
             if (http_code == 200 && chunk.memory) {
                 // Basic JSON parsing
@@ -602,7 +602,7 @@ int send_proof_to_verifier(const uint8_t *proof_data, size_t proof_size) {
             long http_code = 0;
             curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
             printf("Proof Verifier Response - HTTP Code: %ld\n", http_code);
-            printf("Proof Verifier Response - Body: %s\n", chunk.memory ? chunk.memory : "[empty]");
+            // printf("Proof Verifier Response - Body: %s\n", chunk.memory ? chunk.memory : "[empty]");
 
             if (http_code == 200 && chunk.memory) {
                 // Basic JSON parsing
@@ -760,8 +760,15 @@ uint8_t TA_CROSSCON_VALIDATE_MANIFEST(const uint8_t *manifest, size_t manifest_s
             return ERROR_INVALID_PROOF;
         }
 
-        if (property_ids[i].locality_constraint == 1) {
-            printf("Verification of the proof on device\n");
+        // Decide where to verify the proof, if the compressed proof is larger than 300KB, verify on server
+        uint8_t local_proof_verification = decoded_size > 300 * 1024 ? 0 : 1; // 0 = server, 1 = device
+
+        if (property_ids[i].locality_constraint == 1 || local_proof_verification == 1) {
+            if (property_ids[i].locality_constraint == 1) {
+                printf("Locality constraint requires on-device verification.\n");
+            } else {
+                printf("Proof size is small enough for on-device verification.\n");
+            }
 
             // Decode the proof certificate from base64 and write it to the same file
             f = fopen(filename, "wb");
@@ -788,7 +795,7 @@ uint8_t TA_CROSSCON_VALIDATE_MANIFEST(const uint8_t *manifest, size_t manifest_s
 
             // Verify the proof certificate
             char verification_command[500];
-            snprintf(verification_command, sizeof(verification_command), "../ethos/ethos_check.sh %s", uncompressed_filename);
+            snprintf(verification_command, sizeof(verification_command), "../ethos/ethos %s", uncompressed_filename);
             printf("Verifying proof certificate with command: %s\n", verification_command);
             // Execute the command to invoke the proof check (ethos) when the locality constraint is 1
             status = system(verification_command);
@@ -801,7 +808,7 @@ uint8_t TA_CROSSCON_VALIDATE_MANIFEST(const uint8_t *manifest, size_t manifest_s
                 return ERROR_INVALID_PROOF;
             }
         } else {
-            printf("Verification of the proof on server\n");
+            printf("Locality constraint allows server-side verification and proof size is too large for on-device verification.\n");
 
             int proof_verification_status = send_proof_to_verifier(decoded, decoded_size);
 
@@ -891,8 +898,8 @@ uint8_t TA_CROSSCON_INSTALL_IMAGE(const uint8_t *image, size_t image_size) {
         return ERROR_SYSTEM;
     }
 
-    // Move to 128KB offset
-    fseek(bl_file, 128 * 1024, SEEK_SET);
+    // // Move to 128KB offset
+    // fseek(bl_file, 128 * 1024, SEEK_SET);
     size_t written = fwrite(image, 1, image_size, bl_file);
     fclose(bl_file);
 
@@ -900,6 +907,8 @@ uint8_t TA_CROSSCON_INSTALL_IMAGE(const uint8_t *image, size_t image_size) {
         printf("Failed to write the complete image to bootloader file\n");
         return ERROR_SYSTEM;
     }
+
+    printf("Bootloader has been written successfully\n");
 
     return SUCCESS;
 }
