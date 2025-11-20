@@ -349,7 +349,7 @@ int verify_server_response(const char *response, size_t response_size, const uin
                                 fprintf(stderr, "ERROR: Payload hash does not match expected hash.\n");
                                 ret_val = ERROR_INVALID_MANIFEST;
                             } else {
-                                *decoded_payload_out = payload_dec + 32; // Return decoded payload
+                                *decoded_payload_out = payload_dec; // Return decoded payload
                                 ret_val = SUCCESS;
                             }
                         }
@@ -486,14 +486,15 @@ int send_sbom_to_verifier(const uint8_t *base64_sbom_data, size_t base64_sbom_si
                 } else {
 
                     // The base64_encoded_payload contains binary fields:
-                    // success: (byte) 1 | (uint32_t) vulnerability_count
-                    // error: (byte) 0 | (string) error_message
+                    // success: 32-bytes hash | (byte) 1 | (uint32_t) vulnerability_count
+                    // error: 32-bytes hash | (byte) 0 | (string) error_message
 
-                    uint8_t status = (uint8_t)(*payload_str);
+                    uint8_t *payload_body = (uint8_t *)(payload_str + 32); // Skip the hash
+                    uint8_t status = *(payload_body);
 
                     if (status) {
 
-                        uint32_t vulnerability_count = (uint32_t)(*(uint32_t *)(payload_str + 1));
+                        uint32_t vulnerability_count = (uint32_t)(*(uint32_t *)(payload_body + 1));
                         
                         if (vulnerability_count == 0) {
                             ret_val = SUCCESS;
@@ -504,7 +505,7 @@ int send_sbom_to_verifier(const uint8_t *base64_sbom_data, size_t base64_sbom_si
                         }
 
                     } else {
-                        char *error_message = payload_str + 1;
+                        char *error_message = (char *)(payload_body + 1);
                         fprintf(stderr, "ERROR: SBOM verification failed. Server error message: %s\n", error_message);
                         ret_val = ERROR_SBOM_VALIDATION_FAILED;
                     }
@@ -618,10 +619,11 @@ int send_proof_to_verifier(const uint8_t *proof_data, size_t proof_size) {
                 } else {
 
                     // The base64_encoded_payload contains binary fields:
-                    // success: (byte) 1
-                    // error: (byte) 0 | (string) error_message
+                    // success: 32-bytes hash | (byte) 1
+                    // error: 32-bytes hash | (byte) 0 | (string) error_message
 
-                    uint8_t status = (uint8_t)(*payload_str);
+                    uint8_t *payload_body = (uint8_t *)(payload_str + 32); // Skip the hash
+                    uint8_t status = *(payload_body);
 
                     if (status) {
 
@@ -629,7 +631,7 @@ int send_proof_to_verifier(const uint8_t *proof_data, size_t proof_size) {
                         ret_val = SUCCESS;
 
                     } else {
-                        char *error_message = payload_str + 1;
+                        char *error_message = (char *)(payload_body + 1);
                         fprintf(stderr, "ERROR: Proof verification failed. Server error message: %s\n", error_message);
                         ret_val = ERROR_PROOF_VALIDATION_FAILED;
                     }
